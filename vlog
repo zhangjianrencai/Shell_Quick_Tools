@@ -1,0 +1,667 @@
+#!/usr/bin/ksh
+
+# Revision    : 2.0
+# CreateDate  : 2009/05/18 11:00:00 
+# LastChange  : 2009/09/02 12:57:00 
+# Source      : vlog
+# Author      : BrantChen2008@gmail.com
+# Description :  
+# As it's not so convinience to troubleshooting on logs from UNIX for Netbackup. 
+# This shell script is to provide better experiences to view/list/delete Netbackup logs and restart Netbackup processes on UNIX.  
+
+#******************************************************************************
+# Copyright: Copyright 2009 BrantChen2008@gmail.com, All Rights Reserved 
+#******************************************************************************
+
+#******************************************************************************
+# Global Settings.
+#
+# Prepare execute envrionment.
+# Include parameters settings, sets templog's path and name, check if user is 
+# root.
+#
+
+G_Flag_c=0
+G_Flag_f=0
+G_Flag_l=0
+G_Flag_s=0
+G_Value_s=""
+G_Flag_r=0
+
+# This function sets the ECHO variable with the appropriate path & flags.
+# Define Echo to allow escape characters
+case "`uname -s`" in
+  Darwin | FreeBSD)
+    ECHO="echo -e"
+    ls_ls_option ()
+    {
+	    ls -ls $1 | awk '{ printf "%-8s",$6; printf "%s", $9; printf "\n"; }'
+    }
+    ;;
+  Linux*)
+    unset POSIXLY_CORRECT
+    ECHO="/bin/echo -e"
+	if [ -f /etc/redhat-release ] || [ -f /etc/SuSE-release ] ; then
+		ls_ls_option ()
+		{
+			ls -ls $1 | awk '{ printf "%-8s",$6; printf "%s", $10; printf "\n"; }'
+		}
+	else
+		ls_ls_option ()
+		{
+			ls -ls $1 | awk '{ printf "%-8s",$6; printf "%s", $9; printf "\n"; }'
+		}
+	fi	
+    ;;
+  SunOS*)
+    ECHO="/usr/bin/echo"
+    ls_ls_option ()
+    {
+	    ls -ls $1 | awk '{ printf "%-8s",$6; printf "%s", $10; printf "\n"; }'
+    }
+    ;;
+  *)
+    ECHO="echo"
+    ls_ls_option ()
+    {
+	    ls -ls $1 | awk '{ printf "%-8s",$6; printf "%s", $10; printf "\n"; }'
+    }
+    ;;
+esac
+
+# Get the directory containing this script
+G_CWD=`pwd`
+G_Prog_Full_PATH=${G_CWD}
+G_Prog_Basename=`basename $0`
+G_Prog_Full_PATH_AND_NAME="$G_Prog_Full_PATH/${G_Prog_Basename}" 
+
+
+# Intentionally set TMPDIR to /tmp.
+G_TMPDIR=/tmp
+G_Trace_File=${G_TMPDIR}/vlog_trace.log
+
+# Get date
+G_Run_Time=`date -u`
+   
+# log cmd to $G_Trace_File
+${ECHO} "[${G_Run_Time}] $G_Prog_Full_PATH_AND_NAME $@" >> $G_Trace_File
+
+#  Make sure this is being run from root.
+#
+ISROOT=`id | egrep "^uid=0\("`
+if [ "${ISROOT}" = "" ] ; then
+  ${ECHO} ""
+  ${ECHO} "[ERR] $0 must be run while logged in as root."
+  ${ECHO} ""
+  exit 1
+fi
+
+#******************************************************************************
+# Prompt () - determines the flags to use to print
+#      a line without a newline char
+#
+#  *** This function uses the set_echo_var function -${ECHO} to
+#    define the Prompt function.
+#
+# calling signature - Prompt "some string"
+# return value - none
+#
+
+case "`${ECHO} 'x\c'`" in
+  'x\c')
+    Prompt()
+    {
+      ${ECHO} -n "$*"
+    }
+    ;;
+  x)
+    Prompt()
+    {
+      ${ECHO} "$*\c"
+    }
+    ;;
+  *)
+    Prompt()
+    {
+      ${ECHO} -n "$*"
+    }
+    ;;
+esac
+
+# <NOTE>
+# 1. Don't need wrap_up at the moment. We can use it in the future maybe.
+#******************************************************************************
+# To have a nice complete trace, most of the program is executed in a
+# subshell.  In order to preserve any exit status from within the subshell,
+# we need to put it into something visible when the subshell goes away.
+#
+
+#wrap_up ()
+#{
+#  rm -f ${G_TMPDIR}/cdrom_install.$$.status
+#  ${ECHO} ${1} >> ${TMPDIR}/cdrom_install.$$.status
+#  exit
+#}
+
+#******************************************************************************
+# Print help.
+# 
+
+usage ()
+{
+  $ECHO "
+Usage:
+vlog [-s <NBU process name>] [-c] [-f] [-l] [-r] [-h]
+Example:    
+  1.vlog -c
+    Clear all logs at /usr/openv/Netbackup/logs without kill NBU services.
+  2.vlog -f
+    Stop NBU services and clear all logs and start NBU services.
+  3.vlog -h
+    Show the help infomation.
+  4.vlog -l
+    List all available logs.
+  5.vlog -s <NBU process name>
+    Just view related NBU process's log.
+    If there are more than one log file under the process folder, this script 
+    will display them one by one.
+    For example: 
+    vlog -s bpdb2
+    vlog -s user_ops/nbjlogs
+  6.vlog -r 
+    Restart all NBU processes.  
+  7.vlog 
+    Same with "vlog -l".         
+  " 
+}
+
+#******************************************************************************
+# confirm () - Takes three parameters:
+#         1: "y" or "n" to be displayed as the default
+#         2:  a prompt string to be displayed to the user
+#         3:  help text string (optional)
+#
+#      It is expected that the Trace_File variable
+#      has been set to a file or /dev/null.
+#
+#      *** This function uses the Prompt function
+#        which uses the set_echo_var function - ${ECHO}.
+#
+# calling signature:  confirm y "some string" [ "help text" ]
+#          or
+#        confirm n "some string" [ "help text" ]
+#
+# returns: 0 for Yes, 1 for No
+#
+
+confirm ()
+{
+  help=${3}
+  Q=""
+  if [ -n "${help}" ]; then
+    Q=",?"
+  fi
+  Prompt "${2} [y,n${Q}] (${1}) "
+  valid=0
+  until [ ${valid} -ne 0 ]
+  do
+    #read ans and if it is empty, initialize it with the default
+    read ans
+    : ${ans:=${1}}
+
+    #write to the tracefile
+
+    ${ECHO} ${ans} >> ${Trace_File}
+
+    case "${ans}" in
+      Y*|y*)
+        valid=1
+        return 0 ;;
+      N*|n*)
+        valid=1
+        return 1 ;;
+      ?*)
+        ${ECHO} ""
+        ${ECHO} ${help}
+        ${ECHO} ""
+        Prompt "[ASK] ${2} [y,n${Q}] (${1}) "
+        ;;
+      *)
+        ${ECHO} ""
+        Prompt "[ASK] ${ans} is invalid input.  Enter [y,n${Q}] (${1}) "
+        ;;
+    esac
+  done
+}
+
+#******************************************************************************
+# Judge user's input
+#
+
+parse_parameters ()
+{  
+  #vlog [-s <NBU process name>] [-c] [-f]] [-l] [-r] [-h]
+  while getopts :cfhlrs: name
+  do
+    case $name in
+      c) G_Flag_c=1;;
+      f) G_Flag_f=2;;
+      h) usage
+         exit 0;;
+      l) G_Flag_l=4;;
+      s) G_Flag_s=8
+         G_Value_s="$OPTARG";;
+      r) G_Flag_r=16;;
+      :) ${ECHO} ""
+         ${ECHO} "[WARN] Please specify a parameter with this command: $OPTARG
+Or view the usage by running: vlog -h
+    "
+         exit 0;;
+      ?) ${ECHO} ""
+         ${ECHO} "[ERR] Invalid options: $OPTARG"
+         usage
+         exit 2;;
+    esac
+  done   
+}
+
+#******************************************************************************
+# get_logs_count
+# returns: >=0 log_count; Otherwise, exit. We have to use exit in thie func,
+# Because it use echo to return value larger 255.
+#
+
+get_logs_count ()
+{
+  if [ $# -eq 1 ]; then
+    dirname=${1}
+    if [ ! -d ${dirname} ]; then
+      ${ECHO} "[ERR][get_logs_count] ${dirname} didn't exist!"
+      exit 1
+    fi
+  else
+    ${ECHO} "[ERR][get_logs_count] Invalid parameters!"
+    exit 1
+  fi  
+
+  # fixd
+  # you must use () in the next code
+  log_count=`(find ${dirname} -name "*.log" ; find ${dirname} -name "log.*") 2>/dev/null | wc -l`
+  log_count=$(echo $log_count | tr -d ' ')
+  ${ECHO} $log_count
+}
+
+#******************************************************************************
+# check_logs_count_interact
+# returns: 0 for Yes; 1 for No.
+#
+check_logs_count_interact ()
+{
+  if [ $# -ne 1 ]; then
+    ${ECHO} "[ERR] Invalid parameters!"
+    return 1
+  fi  
+  
+  log_count=${1}
+  
+  if [ "$log_count" -eq 0 ]; then
+    if confirm y "[INFO] No available NBU log files at /usr/openv/netbackup/logs/${ans}.
+[ASK] Do you want to restart all NBU services and try again?"
+    then
+      restartnbu
+      ${ECHO} "[INFO] Done. Please do your operations and use vlog to view the logs."
+      ${ECHO} ""
+      exit 0
+    else
+      ${ECHO} "[INFO] You have chosen NO and vlog exits."    
+      ${ECHO} ""  
+      exit 0
+    fi
+  fi
+  
+  return 0;
+}
+
+#******************************************************************************
+# cat_log
+# returns: 0 for Yes; 1 for No.
+#
+# Note: Redirecting standard error output to /dev/null
+#
+
+cat_log ()
+{
+  if [ $# -ne 1 ]; then
+    ${ECHO} "[ERR] Invalid parameters!"
+    return 1
+  fi  
+  
+  # Do not need to check the return value of log_count.
+  # If it failed, script will exit.
+  log_count=`get_logs_count ${logpath}`
+  
+  check_logs_count_interact ${log_count}
+  ret=$?
+  if [ ${ret} -eq 1 ]; then
+    exit 1
+  fi  
+  
+  # Good
+  for file in `ls ${1}/*.log ${1}/log.* 2>/dev/null`
+  do 
+    ${ECHO} "
+===============================================================================
+Entering log file: ${file}
+===============================================================================
+"
+    cat -n ${file} | more
+  done
+  
+  return 0
+}
+
+#******************************************************************************
+# restartnbu
+# returns: 0 for Yes
+#
+
+restartnbu ()
+{
+  ${ECHO} ""
+  ${ECHO} "[INFO] Call /usr/openv/netbackup/bin/bp.kill_all"
+  /usr/openv/netbackup/bin/bp.kill_all 
+  ${ECHO} ""
+  ${ECHO} "[INFO] Call /usr/openv/netbackup/bin/bp.start_all"
+  /usr/openv/netbackup/bin/bp.start_all
+  ${ECHO} ""
+  
+  return 0
+}
+
+#******************************************************************************
+# listlog () - Only list files undre /usr/openv/netbackup/logs.
+# returns: 0 for Yes, 1 for No
+#
+
+listlog ()
+{  
+  ${ECHO} ""
+  
+  # Call mklogdir silently
+  if [ -e /usr/openv/netbackup/logs/mklogdir ]; then
+    /usr/openv/netbackup/logs/mklogdir
+  fi
+  
+  # Do not need to check the return value of log_count.
+  # If it failed, script will exit.
+  log_count1=0;
+  if [ -d /usr/openv/netbackup/logs/ ]; then
+  	log_count1=`get_logs_count /usr/openv/netbackup/logs/`
+  fi
+  
+  log_count=${log_count1}
+  if [ "${log_count}" -eq 0 ]; then
+    ${ECHO} "[INFO] No available log."
+    ${ECHO} ""
+    return 0
+  fi
+  
+  ${ECHO} "[INFO] Available logs:"  
+ 
+  # Here need recursion, so using "find"
+  # <TODO-Enhancement>
+  # Maybe we can use pattern to simplify these code.
+  if [ -d /usr/openv/netbackup/logs/ ] && [ log_count1 -ne 0 ]; then
+    ${ECHO} "Under directory /usr/openv/netbackup/logs/ [$log_count1]:"
+    ${ECHO} "Byte"
+    for file in `find /usr/openv/netbackup/logs/ -name "log.*"`
+    do 
+      ls_ls_option $file
+    done
+    for file in `find /usr/openv/netbackup/logs/ -name "*.log"`
+    do
+      ls_ls_option $file
+    done 
+  fi
+  
+  ${ECHO} ""
+  if [ "${log_count}" -eq 1 ] 
+  then
+  # If there is only one log, you should not use "There are" in the else branch :)  
+    ${ECHO} "[INFO] Only one available log." 
+  else
+    ${ECHO} "[INFO] There are ${log_count} log files at /usr/openv/netbackup/logs/."
+  fi
+  ${ECHO} ""
+  
+  return 0
+}
+
+#******************************************************************************
+# viewlog_by_app_name
+# returns: 0 for Yes, 1 for No
+#
+
+viewlog_by_app_name ()
+{
+  if [ $# -ne 1 ]; then
+    ${ECHO} "[ERR][viewlog_by_app_name] Invalid parameters! "
+    return 1
+  fi  
+  
+  ans=${1}
+  logpath=/usr/openv/netbackup/logs/${ans}/
+  
+  ${ECHO} ""
+  
+  # /Comment Func 1-1.
+  # Import all legal NBU log names from mklogdir script
+  # . /usr/openv/netbackup/logs/mklogdir
+  # Comment Func 1-1./
+  
+  # Call mklogdir silently
+  /usr/openv/netbackup/logs/mklogdir
+  
+  if [ -d ${logpath} ]; then  
+    cat_log ${logpath}
+    ret=$?
+    if [ ${ret} -eq 1 ]; then
+      exit 0
+    fi
+    
+    ${ECHO} ""
+    return 0
+  fi
+  
+  # If the input is not a legal NBU log name, listing all legal NBU log names and
+  # let users to input again or quit.
+  ${ECHO} ""   
+  valid_logname=0 
+      
+  if [ ${valid_logname} -ne 1 ]
+  then
+    valid_logname=0
+    
+    until [ ${valid_logname} -ne 0 ]
+    do       
+      ${ECHO} "[WARN] Wrong NBU available log name!"
+      ${ECHO} "[INFO] Here comes a list of NBU log names which have content in its files:"
+      ${ECHO} ""
+      
+      listlog  
+      
+      ${ECHO} ""
+      ${ECHO} "[ASK] Input NBU log name again or q to quit:"     
+      #read answer and if it is empty, initialize it with the default
+      read ans
+      : ${ans:=${1}}
+      if [ "${ans}" == "Q" ] || [ "${ans}" == "q" ]; then 
+        exit 1 
+      fi
+      
+      if [ -d /usr/openv/netbackup/logs/${ans} ]; then  
+        valid_logname=1
+      fi    
+    done
+  fi    
+
+  # If no log files under /usr/openv/netbackup/logs/${ans}/,
+  # ask user to restart NBU processes and quit.
+  logpath=/usr/openv/netbackup/logs/${ans}/  
+    
+  cat_log ${logpath}
+  ret=$?
+  if [ ${ret} -eq 1 ]; then
+    exit 0
+  fi
+  ${ECHO} ""
+  
+  return 0  
+}
+
+#******************************************************************************
+# clearlog
+# returns: 0 for Yes, 1 for No
+#
+
+clearlog ()
+{
+  if [ $# -gt 1 ]; then
+    ${ECHO} "[ERR] You should have passed more parameters to this function: clearlog"
+    return 1
+  fi  
+  
+  # Call mklogdir silently
+  /usr/openv/netbackup/logs/mklogdir
+  
+  ${ECHO} ""
+  
+  # Do not need to check the return value of log_count.
+  # If it failed, script will exit.
+  log_count1=0;
+  log_count2=0;
+  log_count3=0;
+  log_count4=0;
+  if [ -d /usr/openv/netbackup/logs/ ]; then
+  	log_count1=`get_logs_count /usr/openv/netbackup/logs/`
+  fi
+  if [ -d /usr/openv/logs/ ]; then
+    log_count2=`get_logs_count /usr/openv/logs/`
+  fi
+  if [ -d /var/log/puredisk/ ]; then  
+    log_count3=`get_logs_count /tmp/`
+  fi
+  if [ -d /Storage/log/ ]; then  
+    log_count4=`get_logs_count /Storage/log/`
+  fi
+  log_count=`expr ${log_count1} + ${log_count2} + ${log_count3} + ${log_count4}`
+  if [ "${log_count}" -eq 0 ] 
+  then
+    ${ECHO} "[INFO] No NBU log files has been deleted at /usr/openv/netbackup/logs/."
+    ${ECHO} ""
+    return 0
+  fi
+    
+  if [ "$1" -eq 1 ] && [ "$#" -eq 1 ] ; then 
+    ${ECHO} "[INFO] Call /usr/openv/netbackup/bin/bp.kill_all"
+    /usr/openv/netbackup/bin/bp.kill_all 
+    ${ECHO} ""
+  fi
+  
+  ${ECHO} "[INFO] These NBU log files would be deleted:"
+  if [ -d /usr/openv/netbackup/logs/ ] && [ log_count1 -ne 0 ]; then
+    ${ECHO} ""
+    ${ECHO} "Under directory /usr/openv/netbackup/logs/ [Total: $log_count1]:"
+    ${ECHO} "  KB"
+    for file in `find /usr/openv/netbackup/logs/ -name "log.*"`
+    do 
+      ls_ls_option $file
+      rm -fr $file
+    done
+    for file in `find /usr/openv/netbackup/logs/ -name "*.log"`
+    do
+      ls_ls_option $file
+      rm -fr $file
+    done 
+  fi
+  
+  if [ -d /usr/openv/logs ] && [ log_count2 -ne 0 ]; then  
+    ${ECHO} ""
+    ${ECHO} "Under directory /usr/openv/logs/ [Total: $log_count2]:"
+    ${ECHO} "  KB"
+    for file in `find /usr/openv/logs/ -name "*.log"`
+    do 
+      ls_ls_option $file
+      rm -fr $file
+    done
+  fi
+  
+  if [ -d /var/log/puredisk ] && [ log_count3 -ne 0 ]; then
+    ${ECHO} ""
+    ${ECHO} "Under directory /var/log/puredisk/ [Total: $log_count3]:"
+    ${ECHO} "  KB"
+    for file in `find /var/log/puredisk/ -name "*.log"`
+    do 
+      ls_ls_option $file
+      rm -fr $file
+    done
+  fi
+  if [ -d /Storage/log ] && [ log_count4 -ne 0 ]; then
+    ${ECHO} ""
+    ${ECHO} "Under directory /Storage/log/ [Total: $log_count4]:"
+    ${ECHO} "  KB"
+    for file in `find /Storage/log/ -name "*"`
+    do 
+      ls_ls_option $file
+      rm -fr $file
+    done
+  fi
+    
+  if [ "$1" -eq 1 ] && [ "$#" -eq 1 ] ; then 
+    ${ECHO} ""
+    ${ECHO} "[INFO] Call /usr/openv/netbackup/bin/bp.start_all"
+    ${ECHO} "  KB"
+    /usr/openv/netbackup/bin/bp.start_all
+  fi
+  
+  ${ECHO} ""
+  if [ "${log_count}" -eq 1 ]
+  then
+  	${ECHO} "[INFO] Only one log file has been deleted."
+  else
+  	${ECHO} "[INFO] ${log_count} log files have been deleted."
+  fi 	
+  ${ECHO} ""  
+}
+
+#******************************************************************************
+# main
+#
+
+main ()
+{      
+  parse_parameters "$@"
+   
+  # Get user options
+  user_option_result=`echo $(( ${G_Flag_c} | ${G_Flag_f} | ${G_Flag_l} | ${G_Flag_s} | ${G_Flag_r}))`
+    
+  if [ ${user_option_result} -eq 1 ]; then
+    clearlog
+  elif [ ${user_option_result} -eq 2 ]; then
+    clearlog 1
+  elif [ ${user_option_result} -eq 0 ] || [ ${user_option_result} -eq 4 ] ; then
+    listlog
+  elif [ ${user_option_result} -eq 8 ]; then
+    viewlog_by_app_name ${G_Value_s}
+  elif [ ${user_option_result} -eq 16 ]; then
+    restartnbu
+  else
+    ${ECHO} "You may input error options, please refer to usage below:"
+    usage
+  fi    
+}
+
+################################### MAIN ######################################
+
+main $@
+

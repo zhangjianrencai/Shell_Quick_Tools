@@ -22,11 +22,9 @@
 
 for file in `find . -name "*.tst" -o -name "*.pm" -o -name "*.pl" -o -name "*.in" -o -name "*.txt"` ; do
   tmp=$file".sed"
-  have_dos_sign=`grep -l "
-" $file | wc -l`
+  have_dos_sign=`grep -l "^M" $file | wc -l`
   if [ $have_dos_sign -ge 1 ] ; then
-    sed "s/
-//" $file > $tmp 
+    sed "s/^M//" $file > $tmp 
     rm -f $file && cp $tmp $file && rm -f $tmp
     echo "file [$file] has been changed.\n"
   fi

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+
+for dir in "dir1" "dir2" "dir3"; do
+        for file in `find $dir -name "*.txt"  -o -name "*.exe" -o -name "*.doc"`; do
+                echo $file && tar rvf $dir.tar $file;
+        done
+done
